@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: stable
+          repo-token: ${{ github.token }}
+
+      - name: Install Atlas via Nimble
+        run: nimble install -y "https://github.com/nim-lang/atlas@#head"
+
+      - name: Install Nim dependencies
+        run: atlas install
+
+      - name: Build & Run Tests
+        run: nimble test
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: stable
+          repo-token: ${{ github.token }}
+
+      - name: Install Atlas via Nimble
+        run: nimble install -y "https://github.com/nim-lang/atlas@#head"
+
+      - name: Install Nim dependencies
+        run: atlas install
+
+      - name: Build & Run Tests
+        run: nimble test
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: stable
+          repo-token: ${{ github.token }}
+
+      - name: Install Atlas via Nimble
+        run: nimble install -y "https://github.com/nim-lang/atlas@#head"
+
+      - name: Install Nim dependencies
+        run: atlas install
+
+      - name: Install MSVC toolchain (vcpkg)
+        uses: johnwason/vcpkg-action@v7
+        id: vcpkg
+        with:
+          pkgs: ""
+          triplet: x64-windows-release
+          token: ${{ github.token }}
+
+      - name: Build & Run Tests
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg\installed\x64-windows-release
+        run: |
+          $env:PATH = "$env:VCPKG_ROOT\bin;" + $env:PATH
+          nimble test
