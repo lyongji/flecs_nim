@@ -1,0 +1,292 @@
+## Flecs Nim 中文包装 · 完整版
+##
+## 涵盖：全部 ECS 操作 + CODING_STANDARD.md 通用宏（稳定可编译部分）。
+##
+## 使用方式：
+##   import flecs
+##   import flecs/中文
+##
+##   let 世界 = 新建世界()
+##   世界.注册组件(Position)
+##   let 实体 = 世界.创建命名实体("玩家")
+##   世界.设置组件(实体, Position, Position(x: 10, y: 20))
+##   if 世界.是否拥有组件(实体, Position):
+##     echo 世界.获取组件(实体, Position).x
+
+import std/[macros, times, strutils]
+import raw
+import core
+
+# ══════════════════════════════════════════════════════════════════════
+# 第一部分：CODING_STANDARD.md 通用宏
+# ══════════════════════════════════════════════════════════════════════
+
+macro 定义Distinct类型*(类型名, 底层类型: untyped): untyped =
+  ## 一行定义 distinct 类型，自动生成 borrow、$、转换、比较运算符。
+  let 底层名 = $底层类型
+  let 转换名 = ident("to" & 底层名)
+  result = quote do:
+    type `类型名`* = distinct `底层类型`
+    converter `转换名`*(x: `类型名`): `底层类型` = `底层类型`(x)
+
+template 若*(条件: bool; 则: untyped) =
+  if 条件: 则
+
+template 若*(条件: bool; 则, 否则: untyped) =
+  if 条件: 则 else: 否则
+
+template 统计耗时*(标签: string, 主体: untyped) =
+  let 开始时间 = cpuTime()
+  主体
+  let 耗时 = cpuTime() - 开始时间
+  echo "[" & 标签 & "] 耗时: " & $耗时 & " 秒"
+
+template 以重试执行*(最大重试次数: int, 主体: untyped) =
+  block:
+    var 已重试次数 = 0
+    var 是否成功 = false
+    while 已重试次数 <= 最大重试次数 and not 是否成功:
+      try: 主体; 是否成功 = true
+      except CatchableError as e:
+        已重试次数 += 1; if 已重试次数 > 最大重试次数: raise
+        echo &"重试 {已重试次数}/{最大重试次数}: {e.msg}"
+
+macro 强制命名检查*(主体: untyped): untyped =
+  var 错误列表: seq[string]
+  proc 检查节点(节点: NimNode) =
+    case 节点.kind
+    of nnkVarSection, nnkLetSection:
+      for 定义 in 节点:
+        if 定义.kind == nnkIdentDefs:
+          let 变量名 = $定义[0]; let 类型节点 = 定义[1]
+          if 类型节点.kind == nnkIdent and $类型节点 == "bool":
+            if not 变量名.startsWith("是否"):
+              错误列表.add "布尔变量 `" & 变量名 & "` 必须以 `是否` 开头"
+          if 类型节点.kind == nnkBracketExpr and $类型节点[0] == "seq":
+            if not (变量名.endsWith("列表") or 变量名.endsWith("集合")):
+              错误列表.add "seq 变量 `" & 变量名 & "` 应以 `列表`/`集合` 结尾"
+    else:
+      for 子 in 节点.children: 检查节点(子)
+  检查节点(主体)
+  if 错误列表.len > 0: error(错误列表.join("\n"), 主体)
+  result = 主体
+
+# ══════════════════════════════════════════════════════════════════════
+# 第二部分：ECS 组件 ID
+# ══════════════════════════════════════════════════════════════════════
+
+macro 组件ID*(T: typedesc): untyped =
+  ## 获取 Nim 类型对应的 Flecs 组件 ID（与 ecs_id 共用全局变量）。
+  let 类型名 = T.repr
+  let id名 = ident("FLECS_ID" & 类型名 & "ID_")
+  result = quote do:
+    when not declared(`id名`):
+      var `id名` {.global.}: ecs_entity_t
+    `id名`
+
+# ══════════════════════════════════════════════════════════════════════
+# 第三部分：世界
+# ══════════════════════════════════════════════════════════════════════
+
+type
+  世界* = object
+    ## ECS 世界。作用域结束自动 ecs_fini。不可拷贝。
+    内部*: ptr ecs_world_t
+
+proc `=destroy`*(w: var 世界) =
+  if w.内部 != nil: discard ecs_fini(w.内部); w.内部 = nil
+
+proc `=copy`*(dst: var 世界; src: 世界) {.error: "世界不可拷贝".}
+
+proc 新建世界*(): 世界 =
+  result.内部 = ecs_init()
+
+proc 原始指针*(w: 世界): ptr ecs_world_t =
+  w.内部
+
+# ─── 实体 ───────────────────────────────────────────────────────────
+
+proc 创建命名实体*(w: 世界; 名称: string): ecs_entity_t =
+  var 描述 = ecs_entity_desc_t(name: cstring(名称))
+  result = ecs_entity_init(w.内部, addr 描述)
+
+proc 创建匿名实体*(w: 世界): ecs_entity_t =
+  result = ecs_new(w.内部)
+
+proc 删除实体*(w: 世界; e: ecs_entity_t) =
+  ecs_delete(w.内部, e)
+
+proc 是否存活*(w: 世界; e: ecs_entity_t): bool =
+  result = ecs_is_alive(w.内部, e)
+
+proc 查找实体*(w: 世界; 路径: string): ecs_entity_t =
+  result = ecs_lookup(w.内部, cstring(路径))
+
+proc 获取实体名称*(w: 世界; e: ecs_entity_t): string =
+  result = $ecs_get_name(w.内部, e)
+
+# ─── 组件注册 ───────────────────────────────────────────────────────
+
+macro 注册组件*(w: 世界; T: typedesc): untyped =
+  let 类型名 = T.repr
+  let id名 = ident("FLECS_ID" & 类型名 & "ID_")
+  result = quote do:
+    when not declared(`id名`):
+      var `id名` {.global.}: ecs_entity_t
+    if `id名` == 0:
+      var edesc = ecs_entity_desc_t(
+        name: cstring(`类型名`),
+        symbol: cstring(`类型名`),
+        use_low_id: true)
+      var compDesc = ecs_component_desc_t(
+        entity: ecs_entity_init(`w`.内部, addr edesc),
+        type_field: ecs_type_info_t(
+          size: ecs_size_t(sizeof(`T`)),
+          alignment: ecs_size_t(alignof(`T`))))
+      `id名` = ecs_component_init(`w`.内部, addr compDesc)
+
+macro 注册标签*(w: 世界; T: typedesc): untyped =
+  let 类型名 = T.repr
+  let id名 = ident("FLECS_ID" & 类型名 & "ID_")
+  result = quote do:
+    when not declared(`id名`):
+      var `id名` {.global.}: ecs_entity_t
+    if `id名` == 0:
+      var edesc = ecs_entity_desc_t(name: cstring(`类型名`))
+      `id名` = ecs_entity_init(`w`.内部, addr edesc)
+
+# ─── 组件操作 ───────────────────────────────────────────────────────
+
+template 添加组件*(w: 世界; e: ecs_entity_t; T: typedesc) =
+  ecs_add_id(w.内部, e, 组件ID(T))
+
+template 移除组件*(w: 世界; e: ecs_entity_t; T: typedesc) =
+  ecs_remove_id(w.内部, e, 组件ID(T))
+
+template 设置组件*(w: 世界; e: ecs_entity_t; T: typedesc; 值: T) =
+  var 临时 = 值
+  ecs_set_id(w.内部, e, 组件ID(T), csize_t(sizeof(T)), cast[pointer](addr 临时))
+
+template 获取组件*(w: 世界; e: ecs_entity_t; T: typedesc): ptr T =
+  cast[ptr T](ecs_get_id(w.内部, e, 组件ID(T)))
+
+template 获取可变组件*(w: 世界; e: ecs_entity_t; T: typedesc): ptr T =
+  cast[ptr T](ecs_get_mut_id(w.内部, e, 组件ID(T)))
+
+template 是否拥有组件*(w: 世界; e: ecs_entity_t; T: typedesc): bool =
+  ecs_has_id(w.内部, e, 组件ID(T))
+
+template 是否自身拥有组件*(w: 世界; e: ecs_entity_t; T: typedesc): bool =
+  ecs_owns_id(w.内部, e, 组件ID(T))
+
+template 通知组件已修改*(w: 世界; e: ecs_entity_t; T: typedesc) =
+  ecs_modified_id(w.内部, e, 组件ID(T))
+
+template 确保组件存在*(w: 世界; e: ecs_entity_t; T: typedesc): ptr T =
+  cast[ptr T](ecs_ensure_id(w.内部, e, 组件ID(T), csize_t(sizeof(T))))
+
+template 插入无构造组件*(w: 世界; e: ecs_entity_t; T: typedesc): ptr T =
+  var 是否新建: bool
+  cast[ptr T](ecs_emplace_id(w.内部, e, 组件ID(T), csize_t(sizeof(T)), addr 是否新建))
+
+# ─── 单例 ──────────────────────────────────────────────────────────
+
+template 添加单例*(w: 世界; T: typedesc) =
+  ecs_add_id(w.内部, 组件ID(T), 组件ID(T))
+
+template 移除单例*(w: 世界; T: typedesc) =
+  ecs_remove_id(w.内部, 组件ID(T), 组件ID(T))
+
+template 设置单例*(w: 世界; T: typedesc; 值: T) =
+  var 临时 = 值
+  ecs_set_id(w.内部, 组件ID(T), 组件ID(T), csize_t(sizeof(T)), cast[pointer](addr 临时))
+
+template 获取单例*(w: 世界; T: typedesc): ptr T =
+  cast[ptr T](ecs_get_id(w.内部, 组件ID(T), 组件ID(T)))
+
+template 获取可变单例*(w: 世界; T: typedesc): ptr T =
+  cast[ptr T](ecs_get_mut_id(w.内部, 组件ID(T), 组件ID(T)))
+
+template 通知单例已修改*(w: 世界; T: typedesc) =
+  ecs_modified_id(w.内部, 组件ID(T), 组件ID(T))
+
+# ══════════════════════════════════════════════════════════════════════
+# 第四部分：查询
+# ══════════════════════════════════════════════════════════════════════
+
+type
+  查询* = object
+    世界: ptr ecs_world_t
+    内部: ptr ecs_query_t
+
+proc `=destroy`*(q: var 查询) =
+  if q.内部 != nil: ecs_query_fini(q.内部); q.内部 = nil
+
+proc 按条件查询*(w: 世界; 条件: varargs[ecs_term_t]): 查询 =
+  var d: ecs_query_desc_t
+  for i, t in 条件: d.terms[i] = t
+  result = 查询(世界: w.内部, 内部: ecs_query_init(w.内部, addr d))
+
+proc 按表达式查询*(w: 世界; 表达式: string): 查询 =
+  var d = ecs_query_desc_t(expr: cstring(表达式))
+  result = 查询(世界: w.内部, 内部: ecs_query_init(w.内部, addr d))
+
+# ══════════════════════════════════════════════════════════════════════
+# 第五部分：迭代器
+# ══════════════════════════════════════════════════════════════════════
+
+type
+  迭代器* = object
+    internal: ecs_iter_t
+
+proc 计数*(it: 迭代器): int32 = it.internal.count
+
+proc 实体列表*(it: 迭代器): ptr ecs_entity_t = it.internal.entities
+
+proc 字段*(it: 迭代器; T: typedesc; idx: Natural = 0): ptr UncheckedArray[T] =
+  if it.internal.ptrs == nil: result = nil
+  else: result = cast[ptr UncheckedArray[T]](
+    cast[ptr UncheckedArray[pointer]](it.internal.ptrs)[idx])
+
+proc 推进*(it: var 迭代器): bool =
+  result = ecs_query_next(addr it.internal)
+
+proc 开始遍历*(q: 查询): 迭代器 =
+  result = 迭代器(internal: ecs_query_iter(q.世界, q.内部))
+
+iterator items*(q: 查询): 迭代器 =
+  var it: 迭代器
+  it.internal = ecs_query_iter(q.世界, q.内部)
+  while ecs_query_next(addr it.internal): yield it
+
+# ══════════════════════════════════════════════════════════════════════
+# 第六部分：系统 / 观察者 / Pipeline
+# ══════════════════════════════════════════════════════════════════════
+
+proc 创建系统*(w: 世界; 描述: ecs_system_desc_t): ecs_entity_t =
+  var d = 描述; result = ecs_system_init(w.内部, addr d)
+
+proc 创建观察者*(w: 世界; 描述: ecs_observer_desc_t): ecs_entity_t =
+  var d = 描述; result = ecs_observer_init(w.内部, addr d)
+
+proc 运行系统*(w: 世界; 系统ID: ecs_entity_t; 时间差: float64 = 0.0) =
+  discard ecs_run(w.内部, 系统ID, cfloat(时间差), nil)
+
+proc 推进一帧*(w: 世界; 时间差: float64 = 0.0) =
+  discard ecs_progress(w.内部, cfloat(时间差))
+
+# ══════════════════════════════════════════════════════════════════════
+# 第七部分：按ID遍历
+# ══════════════════════════════════════════════════════════════════════
+
+iterator 按ID遍历*(w: 世界; 组件ID: ecs_id_t): 迭代器 =
+  var it = ecs_each_id(w.内部, 组件ID)
+  while ecs_each_next(addr it): yield 迭代器(internal: it)
+
+# ══════════════════════════════════════════════════════════════════════
+# 第八部分：常用别名
+# ══════════════════════════════════════════════════════════════════════
+
+type
+  实体ID* = ecs_entity_t
+  组件类型ID* = ecs_id_t
