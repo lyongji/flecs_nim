@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # observers/basics — 监听组件的 OnAdd / OnRemove 事件
 type

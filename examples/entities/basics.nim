@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # entities/basics — 实体 CRUD、tag、组件类型查看
 type

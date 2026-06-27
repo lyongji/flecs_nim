@@ -1,19 +1,9 @@
-# Flecs Nim 绑定 - 公开模块
-# 编译 C 源文件（flecs 随仓库分发，静态编译链入）
-{.compile: "../flecs/distr/flecs.c".}
-
-# 平台链接库设置
-when defined(windows):
-  {.passL: "-lws2_32 -ldbghelp".}
-elif defined(linux):
-  {.passL: "-lm -lpthread -ldl".}
-elif defined(macosx):
-  {.passL: "-lm -lpthread -ldl".}
-
-# 引入 futhark 生成的原始绑定
-include "flecs_nim_raw"
-
+## Core ECS ergonomic wrappers.
+##
+## Type-safe templates for entity/component operations, queries, systems, etc.
+## All raw FFI symbols are available via `import flecs/raw`.
 import macros
+import raw
 
 # =============================================================================
 # 组件 ID 声明
@@ -68,7 +58,7 @@ template ecs_auto_override*(world: ptr ecs_world_t; entity: ecs_entity_t; T: typ
 template ecs_set*(world: ptr ecs_world_t; entity: ecs_entity_t; T: typedesc;
                   value: T) =
   ## 设置组件值。对应 C 宏: `ecs_set(world, e, Position, {10, 20})`
-  var tmp = value  # ponytail: stable stack address for set_id
+  var tmp = value
   ecs_set_id(world, entity, ecs_id(T), csize_t(sizeof(T)),
              cast[pointer](addr tmp))
 

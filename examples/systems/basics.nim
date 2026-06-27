@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # systems/basics — 系统创建与手动执行 (ecs_run)
 type

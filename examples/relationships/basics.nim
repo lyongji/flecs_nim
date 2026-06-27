@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # relationships/basics — 关系（Pairs）：Eats、Grows、通配符查询
 type

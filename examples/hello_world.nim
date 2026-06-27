@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # 最简示例：世界创建、组件注册、实体操作
 type

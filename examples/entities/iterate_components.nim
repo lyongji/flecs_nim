@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # entities/iterate_components — 遍历实体的组件 ID 列表
 type

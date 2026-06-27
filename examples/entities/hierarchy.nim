@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # entities/hierarchy — 父子层级、路径查找、ChildOf 关系
 type

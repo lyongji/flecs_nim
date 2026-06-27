@@ -1,134 +1,126 @@
-# flecs_nim — Nim bindings for FLECS
+# flecs — Nim bindings for FLECS
 
 [Nim][nim] bindings for [FLECS][flecs] v4.1.5, a fast and lightweight Entity Component System written in C.
 
 [nim]: https://nim-lang.org
 [flecs]: https://github.com/SanderMertens/flecs
 
+## Import
+
+| Import | What you get |
+|--------|-------------|
+| `import flecs` | **Everything** (recommended) — raw FFI + core wrappers + all addons |
+| `import flecs/raw` | Raw FFI only (714 `ecs_*` procs) |
+| `import flecs/core` | Core type-safe wrappers only |
+| `import flecs/high` | Nim-style high-level API (RAII, opt-in) |
+| `import flecs/meta` | Reflection / metadata |
+| `import flecs/json` | JSON serialization |
+| `import flecs/http` | HTTP server + REST API |
+| `import flecs/script` | Flecs script execution |
+
 ## Quick Start
 
+### Core API (template style)
+
 ```nim
-import flecs_nim
+import flecs
 
-type
-  Position = object
-    x, y: float64
-  Velocity = object
-    vx, vy: float64
+type Position = object
+  x, y: float64
 
-# Init world
 var world = ecs_init()
 defer: discard ecs_fini(world)
 
-# Register components (like ECS_COMPONENT)
 discard ecs_component(world, Position)
-discard ecs_component(world, Velocity)
-
-# Create entity with components
 let e = ecs_new(world)
 ecs_add(world, e, Position)
-ecs_add(world, e, Velocity)
 ecs_set(world, e, Position, Position(x: 10, y: 20))
 
-# Query entities
 let q = ecs_query(world, ecs_query_desc_t(
-  terms: ecs_terms(
-    ecs_term_t(id: ecs_id(Position)),
-    ecs_term_t(id: ecs_id(Velocity)),
-  ),
+  terms: ecs_terms(ecs_term_t(id: ecs_id(Position))),
 ))
-
 var it = ecs_query_iter(world, q)
 while ecs_query_next(addr it):
   echo "matched: ", it.count
 ```
 
-## API
-
-### Type-safe wrappers (Nim templates — mirror C macros)
-
-| Nim call | C equivalent |
-|----------|-------------|
-| `ecs_component(world, Position)` | `ECS_COMPONENT(world, Position)` |
-| `ecs_tag(world, MyTag)` | `ECS_TAG(world, MyTag)` |
-| `ecs_add(world, e, Position)` | `ecs_add(world, e, Position)` |
-| `ecs_set(world, e, Pos, Pos(x:1))` | `ecs_set(world, e, Position, {1, 0})` |
-| `ecs_get(world, e, Position)` | `ecs_get(world, e, Position)` |
-| `ecs_has(world, e, Position)` | `ecs_has(world, e, Position)` |
-| `ecs_remove(world, e, Position)` | `ecs_remove(world, e, Position)` |
-| `ecs_query(world, desc)` | `ecs_query(world, {...})` |
-| `ecs_system(world, desc)` | `ecs_system(world, {...})` |
-| `ecs_observer(world, desc)` | `ecs_observer(world, {...})` |
-| `ecs_terms(term1, term2)` | `{ecs_id(X), ecs_id(Y)}` |
-| Singleton: `ecs_singleton_add/set/get/...` | `ecs_singleton_*` |
-
-All raw `ecs_*` procs (714 total) from `<flecs.h>` are available directly.
-
-### Callbacks
-
-Callbacks must be `{.cdecl.}` procs at module scope (not closures):
+### High-level API (RAII style)
 
 ```nim
-proc mySystem(it: ptr ecs_iter_t) {.cdecl.} =
-  let p = cast[ptr UncheckedArray[Position]](
-    cast[ptr UncheckedArray[pointer]](it.ptrs)[0])
-  for i in 0 ..< it.count:
-    p[i].x += 1
+import flecs
+import flecs/high
 
-let sysId = ecs_system(world, ecs_system_desc_t(
-  callback: mySystem,
-  query: ecs_query_desc_t(terms: ecs_terms(ecs_term_t(id: ecs_id(Position)))),
-))
+let world = newEcsWorld()
+world.component(Position)
+let e = world.entity("Bob")
+world.set(e, Position, Position(x: 10, y: 20))
+echo world.get(e, Position).x
 ```
 
-## Building
+## Module Architecture
 
-### Requirements
+```
+  Import              Wrapper Layer             FFI Layer              C
+┌──────────┐   ┌──────────────────────┐   ┌───────────────┐   ┌──────────────┐
+│  flecs   │──▶│  core.nim            │──▶│  raw.nim      │──▶│  flecs.c/h   │
+│ (entry)  │   │  high.nim            │   │  *_raw.nim    │   │  (submodule) │
+│          │   │  meta.nim / json.nim │   │  [generated]  │   │              │
+│          │   │  http / script / ... │   │               │   │              │
+└──────────┘   └──────────────────────┘   └───────────────┘   └──────────────┘
+```
 
-- Nim ≥ 2.2.8
-- C compiler (GCC, Clang, or MSVC)
-- [futhark][futhark] (for regenerating bindings)
-
-[futhark]: https://github.com/PMunch/futhark
-
-### Compile
+## Testing
 
 ```sh
-nimble install
-nimble test
+nimble test              # debug mode
+nimble testRelease       # release mode
+nimble testDanger        # danger mode
+nimble testAsan          # AddressSanitizer
 ```
 
-To regenerate the raw bindings from `flecs.h`:
-
-```sh
-nim c -r -d:useFuthark flecs.nim
-```
-
-### Linking
-
-FLECS is compiled from vendored source (`flecs/distr/flecs.c`). System libraries are linked automatically per platform:
-
-| Platform | Link flags |
-|----------|-----------|
-| Linux | `-lm -lpthread -ldl` |
-| macOS | `-lm -lpthread -ldl` |
-| Windows (MSVC) | `-lws2_32 -ldbghelp` |
+10 auto-discovered test files cover: core ECS, queries, systems, observers, singletons, high-level API, meta, JSON, scripts, and edge cases. See `tests/tester.nim` for the runner, `tests/config.nims` for ASan support.
 
 ## Project Structure
 
 ```
-flecs_nim/
-├── flecs.nim              # Futhark driver (regenerate raw bindings)
-├── flecs_nim.nimble       # Nimble package (srcDir = "src")
-├── flecs/                 # FLECS C source (git submodule)
+flecs/
+├── flecs.nim                 # Futhark driver
+├── flecs_nim.nimble          # Package config (srcDir = "src")
+├── doc.md                    # Chinese usage guide
+├── flecs/                    # FLECS C source (git submodule)
+├── wrappers/                 # C wrapper headers for modular generation
+├── scripts/
+│   └── regenerate.sh         # one-command regeneration
 ├── src/
-│   ├── flecs_nim.nim      # Public module (link flags + raw + ergonomic layer)
-│   └── flecs_nim_raw.nim  # Futhark-generated raw FFI (714 procs, ~4100 lines)
+│   ├── flecs.nim             # entry point (compile + link + export)
+│   └── flecs/
+│       ├── raw.nim           # [generated] core FFI
+│       ├── core.nim          # core type-safe wrappers
+│       ├── high.nim          # Nim-style high-level API
+│       ├── meta.nim          # reflection addon
+│       ├── json.nim          # JSON serialization
+│       ├── http.nim          # HTTP server addon
+│       ├── script.nim        # Flecs script addon
+│       ├── alerts.nim        # alerts addon
+│       ├── stats.nim         # stats addon
+│       ├── app.nim           # app framework addon
+│       └── all.nim           # convenience import-all
+├── examples/
+│   ├── hello_world.nim       # minimal example
+│   ├── highlevel.nim         # high-level API example
+│   ├── entities/ / queries/ / systems/
+│   └── observers/ / relationships/ / reflection/
 ├── tests/
-│   ├── test1.nim          # Smoke tests (10 blocks, doAssert)
-│   └── tester.nim         # Auto-discovering test runner
+│   ├── config.nims           # ASan support
+│   ├── shared.nim            # shared test helpers
+│   ├── tester.nim            # auto-discovering runner
+│   ├── tcore.nim / tquery.nim / tsystem.nim
+│   ├── tobserver.nim / tsingleton.nim / thigh.nim
+│   ├── tmeta.nim / tjson.nim / tscript.nim
+│   └── tedge.nim
+├── README.md / README_zh.md
 └── .github/workflows/
-    └── ci.yml             # Cross-platform CI (Linux, macOS, Windows)
+    └── ci.yml                # Nim 2.2.8 + stable, 3 build modes, 3 platforms
 ```
 
 ## License

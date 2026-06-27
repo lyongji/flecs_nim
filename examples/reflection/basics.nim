@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # reflection/basics — 组件反射：为 Position 添加元信息并序列化
 type

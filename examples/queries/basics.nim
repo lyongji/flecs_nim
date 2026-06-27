@@ -1,4 +1,4 @@
-import flecs_nim
+import flecs
 
 # queries/basics — 用 ecs_each 遍历 + 条件过滤
 type

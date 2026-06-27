@@ -3,3 +3,7 @@ nimble.paths
 nimbledeps
 *.out
 .github/
+tests/t*
+examples/highlevel
+!tests/t*.nim
+!tests/tester.nim
